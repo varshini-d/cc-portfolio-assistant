@@ -1,0 +1,8 @@
+anthropic>=0.49
+duckdb>=1.1
+faiss-cpu>=1.8
+sentence-transformers>=3.0
+pandas>=2.0
+numpy>=1.26
+streamlit>=1.36
+python-dotenv>=1.0
