@@ -21,7 +21,7 @@ from dotenv import load_dotenv
 from sentence_transformers import SentenceTransformer
 from anthropic import Anthropic
 
-from knowledge_base import SCHEMA_TEXT, GLOSSARY_TEXT
+from knowledge_base import SCHEMA_TEXT, GLOSSARY_TEXT, RULES_TEXT
 
 load_dotenv()
 client = Anthropic()                       # reads ANTHROPIC_API_KEY from env
@@ -40,7 +40,9 @@ SCHEMA:
 {SCHEMA_TEXT}
 
 METRICS & ENUMS:
-{GLOSSARY_TEXT}"""
+{GLOSSARY_TEXT}
+
+{RULES_TEXT}"""
 
 
 # ----- Step 4 (+ Upgrade 1 ablation flag): retrieval -----
@@ -114,7 +116,7 @@ def ask(question, use_examples=True, verbose=False):
 
 
 if __name__ == "__main__":
-    out = ask("What's the 90+ DPD rate by segment?", verbose=True)
+    out = ask("What's the charge-off rate by risk tier?", verbose=True)
     print("\nSQL:\n", out["sql"])
     print("\nAnswer:\n", out["answer"])
     if out["result"] is not None:

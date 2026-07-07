@@ -6,3 +6,9 @@ portfolio.db
 kb.index
 kb_meta.pkl
 .streamlit/
+
+# raw Lending Club CSV is huge (~1.6GB) -- never commit it.
+# We commit only the small trimmed Parquet we derive from it.
+data/raw/
+!data/raw/.gitkeep
+*.csv

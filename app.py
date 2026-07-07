@@ -3,15 +3,18 @@ import streamlit as st
 
 from assistant import ask
 
-st.set_page_config(page_title="Credit Card Portfolio Assistant", page_icon="??")
-st.title("Credit Card Portfolio Analytics Assistant")
-st.caption("Text-to-SQL with RAG over schema + a credit-risk metric glossary")
+st.set_page_config(page_title="Consumer Lending Portfolio Assistant", page_icon="💳")
+st.title("Consumer Lending Portfolio Analytics Assistant")
+st.caption("Text-to-SQL with RAG over a real Lending Club portfolio (2007–2018) "
+           "+ a credit-risk metric glossary")
 
 examples = [
-    "What's the 90+ DPD rate by segment?",
-    "Charge-off rate by vintage for subprime accounts",
-    "Average utilization for travel cards in the prime segment",
-    "How many active accounts per product type?",
+    "What's the charge-off rate by risk tier?",
+    "Charge-off rate by vintage for subprime loans",
+    "Average interest rate by grade",
+    "Charge-off rate for credit card loans",
+    "Average revolving utilization by risk tier",
+    "Currently-delinquent rate by grade",
 ]
 q = st.selectbox("Try an example, or type your own below:", [""] + examples)
 q = st.text_input("Ask about the portfolio:", value=q or examples[0])

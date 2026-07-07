@@ -1,43 +1,123 @@
-"""Step 1 — build a synthetic credit card portfolio in DuckDB.
+"""Step 1 - load + clean a REAL consumer-lending portfolio into DuckDB.
 
+Source: Lending Club accepted loans 2007-2018 (~2.26M rows, 151 cols).
 This is the data the assistant QUERIES. It is NOT the knowledge base.
+
+Design:
+  - LOCAL:  if the raw Lending Club CSV is present under data/raw/, we clean it,
+            trim to the columns we care about, take a reproducible sample, and
+            write BOTH portfolio.db (DuckDB) and data/portfolio.parquet.
+  - DEPLOY: if the raw CSV is absent (e.g. on a host) but the committed
+            data/portfolio.parquet exists, we just load that into portfolio.db.
+
+So you commit only the small Parquet; the giant raw CSV stays on your machine.
+
 Run once:  python build_data.py
 """
+import glob
+import os
+
 import duckdb
-import numpy as np
-import pandas as pd
 
-np.random.seed(42)
-N = 20_000
+SAMPLE_ROWS = 250_000          # rows kept in the queried table (None = keep all)
+SEED = 42                      # reproducible sample
+PARQUET = "data/portfolio.parquet"
 
-vintages = [f"{y}Q{q}" for y in (2022, 2023, 2024) for q in (1, 2, 3, 4)]
-products = ["cashback", "travel", "store_card", "secured"]
-segments = ["prime", "near-prime", "subprime"]
+# The cleaning SELECT. One row per loan. Honest, real columns only -- no faked DPD.
+CLEAN_SQL = """
+SELECT
+    TRY_CAST(id AS BIGINT)                          AS loan_id,
+    issue_d,                                                              -- 'Dec-2015'
+    CAST(strftime(strptime(issue_d, '%b-%Y'), '%Y') AS INT)              AS issue_year,
+    strftime(strptime(issue_d, '%b-%Y'), '%Y') || 'Q'
+        || CAST(quarter(strptime(issue_d, '%b-%Y')) AS VARCHAR)         AS vintage,   -- '2015Q4'
+    CAST(TRIM(REPLACE(term, 'months', '')) AS INT)                      AS term_months,
+    grade,
+    sub_grade,
+    CASE
+        WHEN grade IN ('A','B') THEN 'prime'
+        WHEN grade IN ('C','D') THEN 'near-prime'
+        ELSE 'subprime'
+    END                                                                 AS risk_tier,
+    purpose,
+    home_ownership,
+    loan_amnt,
+    int_rate,
+    installment,
+    annual_inc,
+    dti,
+    fico_range_low                                                      AS fico_low,
+    revol_util                                                          AS utilization,
+    out_prncp                                                           AS outstanding_principal,
+    total_pymnt,
+    addr_state,
+    loan_status,
+    CASE WHEN loan_status LIKE '%Charged Off%' THEN 1 ELSE 0 END        AS charge_off_flag,
+    CASE WHEN loan_status LIKE 'Late%' OR loan_status = 'Default'
+         THEN 1 ELSE 0 END                                             AS is_delinquent
+FROM raw
+WHERE grade IS NOT NULL          -- drops the ~33 blank trailing rows
+  AND issue_d IS NOT NULL
+  AND loan_status NOT IN ('None')
+"""
 
-df = pd.DataFrame({
-    "account_id": range(1, N + 1),
-    "vintage": np.random.choice(vintages, N),
-    "product_type": np.random.choice(products, N, p=[0.40, 0.30, 0.20, 0.10]),
-    "segment": np.random.choice(segments, N, p=[0.50, 0.30, 0.20]),
-    "credit_limit": np.random.choice([1000, 2500, 5000, 10000, 15000], N),
-})
 
-# Delinquency probability rises as credit quality falls.
-delinq_p = df["segment"].map({"prime": 0.03, "near-prime": 0.10, "subprime": 0.25}).values
-df["dpd"] = np.where(
-    np.random.rand(N) < delinq_p,
-    np.random.choice([30, 60, 90, 120], N),
-    0,
-)
-df["current_balance"] = (df["credit_limit"] * np.random.beta(2, 5, N)).round(2)
-df["charge_off_flag"] = ((df["dpd"] >= 120) & (np.random.rand(N) < 0.6)).astype(int)
+def find_raw_csv():
+    """Find the largest *.csv under data/raw/ (handles the nested-folder unzip)."""
+    candidates = glob.glob("data/raw/**/*.csv", recursive=True)
+    candidates = [c for c in candidates if os.path.getsize(c) > 1_000_000]
+    return max(candidates, key=os.path.getsize) if candidates else None
 
-con = duckdb.connect("portfolio.db")
-con.execute("DROP TABLE IF EXISTS accounts")
-con.execute("CREATE TABLE accounts AS SELECT * FROM df")
-rows, dpd90 = con.execute(
-    "SELECT COUNT(*), AVG(CASE WHEN dpd>=90 THEN 1.0 ELSE 0 END) FROM accounts"
-).fetchone()
-con.close()
 
-print(f"OK  portfolio.db created: {rows} accounts, 90+ DPD rate = {dpd90:.1%}")
+def build_from_csv(con, csv_path):
+    print(f"Loading raw CSV: {csv_path}")
+    con.execute(
+        f"CREATE OR REPLACE VIEW raw AS SELECT * FROM "
+        f"read_csv_auto('{csv_path}', sample_size=200000, types={{'id': 'VARCHAR'}})"
+    )
+    sample = (f"USING SAMPLE {SAMPLE_ROWS} ROWS (reservoir, {SEED})"
+              if SAMPLE_ROWS else "")
+    con.execute("DROP TABLE IF EXISTS accounts")
+    con.execute(f"CREATE TABLE accounts AS {CLEAN_SQL} {sample}")
+    os.makedirs("data", exist_ok=True)
+    con.execute(f"COPY accounts TO '{PARQUET}' (FORMAT PARQUET)")
+    print(f"Wrote committed sample -> {PARQUET}")
+
+
+def build_from_parquet(con):
+    print(f"Raw CSV not found; loading committed sample: {PARQUET}")
+    con.execute("DROP TABLE IF EXISTS accounts")
+    con.execute(f"CREATE TABLE accounts AS SELECT * FROM read_parquet('{PARQUET}')")
+
+
+def main():
+    con = duckdb.connect("portfolio.db")
+    csv_path = find_raw_csv()
+    if csv_path:
+        build_from_csv(con, csv_path)
+    elif os.path.exists(PARQUET):
+        build_from_parquet(con)
+    else:
+        raise SystemExit(
+            "No data found. Put the Lending Club CSV under data/raw/ "
+            f"or provide {PARQUET}."
+        )
+
+    rows, co_rate, dq_rate = con.execute("""
+        SELECT COUNT(*),
+               AVG(charge_off_flag),
+               AVG(is_delinquent)
+        FROM accounts
+    """).fetchone()
+    vmin, vmax = con.execute(
+        "SELECT MIN(issue_year), MAX(issue_year) FROM accounts"
+    ).fetchone()
+    con.close()
+
+    print(f"OK  portfolio.db created: {rows:,} loans, "
+          f"vintages {vmin}-{vmax}, "
+          f"charge-off rate = {co_rate:.1%}, currently-delinquent = {dq_rate:.1%}")
+
+
+if __name__ == "__main__":
+    main()
