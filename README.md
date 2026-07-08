@@ -1,5 +1,7 @@
 # Consumer Lending Portfolio Analytics Assistant — Text-to-SQL with RAG
 
+**🔗 Live demo:** https://cc-portfolio-assistant.streamlit.app/ (password-protected — ask for access)
+
 A natural-language analytics assistant over a **real consumer-lending portfolio**
 (Lending Club, 2007–2018, ~2.26M loans). You ask a business question
 ("charge-off rate by vintage for subprime loans"); the system retrieves schema +
